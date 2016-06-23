@@ -353,6 +353,23 @@ function acpf!(c::MatpowerCases.Case; silent = false)
         b.BUS_TYPE, Y, J,
         Vmax = b.VMAX, Qmin = Qmin, Qmax = Qmax, silent = silent)
 
+    # update generation at slack bus
+    if length(findin(b.BUS_TYPE, 3)) > 1
+        warn("More than one slack bus!")
+    else
+        bidx = findfirst(b.BUS_TYPE, 3)
+        gidx = findfirst(g.GEN_BUS, bidx)
+        g.PG[gidx] = Pc[bidx]
+        g.QG[gidx] = Qc[bidx]
+    end
+
+    # update reactive generation at PV buses
+    bidx = findin(b.BUS_TYPE, 2)
+    for i in bidx
+        gidx = findfirst(g.GEN_BUS, i)
+        g.QG[gidx] = Qc[i]
+    end
+
     # convert back to physical units
     scale!(c, c.baseMVA)
     # convert back to degrees
