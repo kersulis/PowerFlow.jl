@@ -360,6 +360,7 @@ function acpf!(c::MatpowerCases.Case; silent = false)
 
     # convert back to old bus labels
     old != new && renumber!(c, new, old)
+    nothing
 end
 
 function getY(c::MatpowerCases.Case; reindex = true)
