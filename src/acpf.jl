@@ -1,7 +1,7 @@
 using MatpowerCases
 
 """
-An AC power flow routine based on Newton's method and capable of accommodating voltage and reactive power limits.
+An AC power flow routine based on Newton's method. Accommodates voltage and reactive power limits.
 
 IN
 
@@ -18,7 +18,6 @@ IN
 * `Qmin` [pu], Vector of minimum reactive power injections
 * `Qmax` [pu], Vector of maximum reactive power injections
 * `tol` [-], Newton iteration tolerance, 1e-5 by default
-* `switch_tol` [-], Tolerance for PV <--> PQ bus switching, 1.0 by default
 * `maxiter` [-], Maximum allowable iterations
 * `silent` [-], Set to true to suppress messages
 
@@ -46,7 +45,6 @@ function acpf!(
     Qmin::Vector{Float64} = Float64[],
     Qmax::Vector{Float64} = Float64[],
     tol::Float64 = 1e-5,
-    switch_tol::Float64 = 1.0,
     maxiter::Int64 = 8,
     silent::Bool = false
     )
@@ -64,23 +62,29 @@ function acpf!(
     # Newton iteration
     iter = 0
     while iter < maxiter
-        injcalc!(Pc, Qc, V, T, Y)
+        injection!(Pc, Qc, V, T, Y)
         jacobian!(J, ty, V, T, Pc, Qc, Y)
         mismatch!(mis, Ps, Pc, Qs, Qc, ty)
 
-        if maxabs(mis) < tol && iter > 1
-            converged = true
-            !silent && info("Converged, $(iter) iterations")
-            break
+        if maxabs(mis) < tol #&& iter > 1
+            tycheck = deepcopy(ty)
+            Vlim && pq2pv!(ty, V, Qc, Vmax; silent = silent)
+            Qlim && pv2pq!(ty, V, Qs, Qc, Qmin, Qmax; silent = silent)
+
+            if ty == tycheck
+                converged = true
+                !silent && info("Converged, $(iter) iterations")
+                break
+            end
         else
             update = lufact!(-J)\mis
             T[:] += update[1:nb]
             V[:] += update[nb+1:2nb]
 
-            if maxabs(mis) < switch_tol
-                Vlim && pq2pv!(ty, V, Qc, Vmax; silent = silent)
-                Qlim && pv2pq!(ty, V, Qs, Qc, Qmin, Qmax; silent = silent)
-            end
+            # if maxabs(mis) < switch_tol
+            #     Vlim && pq2pv!(ty, V, Qc, Vmax; silent = silent)
+            #     Qlim && pv2pq!(ty, V, Qs, Qc, Qmin, Qmax; silent = silent)
+            # end
         end
         iter += 1
     end
@@ -101,11 +105,10 @@ IN:
 
 OUT: modifies input arguments `Pc` and `Qc`.
 """
-function injcalc!(Pc, Qc, V, T, Y)
-    nb = length(V)
+function injection!(Pc, Qc, V, T, Y)
     Pc[:] = 0.
     Qc[:] = 0.
-    @inbounds for i in 1:nb
+    @inbounds for i in 1:length(V)
         for k in find(Y[i,:])
             Tik = T[i] - T[k]
             Gik, Bik = real(Y[i,k]), imag(Y[i,k])
@@ -227,7 +230,7 @@ IN:
 * `Qmin`, vector of minimum reactive power injections [pu]
 * `Qmax`, vector of maximum reactive power injections [pu]
 
-OUT: This function modifies input arguments `ty`, `V`, and `Q`.
+OUT: This function modifies input arguments `ty` and `Qs`.
 """
 function pv2pq!(ty, V, Qs, Qc, Qmin, Qmax; silent = false)
     @inbounds for i in find(ty.==2)
@@ -317,7 +320,7 @@ function getY(
 
     # build Ybus
     Y = Cf'*Yf + Ct'*Yt + sparse(1:nbus,1:nbus,ysh,nbus,nbus)
-    return Y
+    return Y #, Yf, Yt
 end
 
 function acpf!(c::MatpowerCases.Case; silent = false)
