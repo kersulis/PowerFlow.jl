@@ -50,42 +50,42 @@ function acpf!(
     )
 
     nb = length(ty)
-    converged = false
 
     # determine whether PQ nodes will switch to PV or vice versa
     Vlim = !isempty(Vmax)
     Qlim = !isempty(Qmin) || !isempty(Qmax)
 
-    # initialize mismatch vector
-    mis = zeros(2nb)
+    # initialize mismatch, update vectors
+    mis = Vector{Float64}(2nb)
+    update = Vector{Float64}(2nb)
 
     # Newton iteration
+    converged = false
     iter = 0
     while iter < maxiter
         injection!(Pc, Qc, V, T, Y)
-        jacobian!(J, ty, V, T, Pc, Qc, Y)
         mismatch!(mis, Ps, Pc, Qs, Qc, ty)
 
-        if maxabs(mis) < tol #&& iter > 1
+        # are we done?
+        if maxabs(mis) < tol
+            # see if any buses need to change type
             tycheck = deepcopy(ty)
             Vlim && pq2pv!(ty, V, Qc, Vmax; silent = silent)
             Qlim && pv2pq!(ty, V, Qs, Qc, Qmin, Qmax; silent = silent)
 
+            # if no type changes, terminate
             if ty == tycheck
                 converged = true
                 !silent && info("Converged, $(iter) iterations")
                 break
             end
-        else
-            update = lufact!(-J)\mis
-            T[:] += update[1:nb]
-            V[:] += update[nb+1:2nb]
-
-            # if maxabs(mis) < switch_tol
-            #     Vlim && pq2pv!(ty, V, Qc, Vmax; silent = silent)
-            #     Qlim && pv2pq!(ty, V, Qs, Qc, Qmin, Qmax; silent = silent)
-            # end
         end
+
+        # if not done, update and continue
+        jacobian!(J, ty, V, T, Pc, Qc, Y)
+        update[:] = lufact!(-J)\mis
+        T[:] += update[1:nb]
+        V[:] += update[nb+1:2nb]
         iter += 1
     end
     !converged && warn("Powerflow not converged")
@@ -180,13 +180,13 @@ function jacobian!(J, ty, V, T, Pc, Qc, Y)
     nothing
 end
 
-function mismatch!(mis, P, Pc, Q, Qc, ty)
-    nb = length(P)
+function mismatch!(mis, Ps, Pc, Qs, Qc, ty)
+    nb = length(Ps)
     Pm = sub(mis, 1:nb)
     Qm = sub(mis, (nb + 1):2nb)
-    @inbounds for i = 1:length(P)
-        Pm[i] = (ty[i] != 3 ? Pc[i] - P[i] : 0)
-        Qm[i] = (ty[i] == 1 ? Qc[i] - Q[i] : 0)
+    @inbounds for i = 1:nb
+        Pm[i] = (ty[i] != 3 ? Pc[i] - Ps[i] : 0)
+        Qm[i] = (ty[i] == 1 ? Qc[i] - Qs[i] : 0)
     end
     nothing
 end
@@ -281,7 +281,7 @@ function getY(
     lineOut::Vector{Bool} = fill(false, length(from)),
     reindex::Bool = true
     )
-    # remap bus tags to 1:nbus indices
+
     if reindex
         old = sort(unique([from;to]))
         new = collect(1:length(old))
@@ -294,6 +294,7 @@ function getY(
         t = to
     end
 
+    nbus,nline = length(ysh),length(lineOut)
     inService = find(!lineOut)
     tap = tap[inService]
     fis = f[inService]
@@ -302,12 +303,10 @@ function getY(
     Ys = (1./(r + x*im))[inService]
     Bc = b[inService]
     Ytt = Ys + Bc*im/2
-    Yff = Ytt./(tap.*conj(tap))
+    Yff = Ytt./(abs2(tap))
     Yft = -Ys./conj(tap)
     Ytf = -Ys./tap
 
-    # build connection matrices
-    nbus,nline = length(ysh),length(lineOut)
     # connection matrix for line and from buses
     Cf = sparse(1:nline,f,ones(nline),nline,nbus)
     # connection matrix for line and to buses
