@@ -1,4 +1,5 @@
 using MatpowerCases
+using JLD
 
 """
 An AC power flow routine based on Newton's method. Accommodates voltage and reactive power limits.
@@ -31,19 +32,19 @@ OUT: Modifies the following input arguments.
 * `ty` [-], If a PQ bus reaches its maximum voltage, the algorithm converts it
 to a PV bus. If a PV bus encounters a reactive power limit, the algorithm converts it to a PQ bus.
 """
-function acpf!(
+function acpf!{I<:Integer, F<:AbstractFloat}(
     V::Vector{Float64},
     T::Vector{Float64},
     Ps::Vector{Float64},
     Qs::Vector{Float64},
     Pc::Vector{Float64},
     Qc::Vector{Float64},
-    ty::Vector{Int64},
+    ty::Vector{I},
     Y::Union{Array{Complex{Float64},2},SparseMatrixCSC{Complex{Float64},Int64}},
     J::Union{Array{Float64,2},SparseMatrixCSC{Float64,Int64}};
-    Vmax::Vector{Float64} = Float64[],
-    Qmin::Vector{Float64} = Float64[],
-    Qmax::Vector{Float64} = Float64[],
+    Vmax::Vector{F} = Float32[],
+    Qmin::Vector{F} = Float32[],
+    Qmax::Vector{F} = Float32[],
     tol::Float64 = 1e-5,
     maxiter::Int64 = 8,
     silent::Bool = false
@@ -78,6 +79,9 @@ function acpf!(
                 converged = true
                 !silent && info("Converged, $(iter) iterations")
                 break
+            else
+                # recompute injection, mismatch
+                continue
             end
         end
 
@@ -88,7 +92,10 @@ function acpf!(
         V[:] += update[nb+1:2nb]
         iter += 1
     end
-    !converged && warn("Powerflow not converged")
+    if !converged
+        warn("Powerflow not converged")
+        # save("dump.jld", "V", V, "T", T, "ty", ty, "Pc", Pc, "Qc", Qc, "mis", mis, "Ps", Ps, "Qs", Qs, "Qmin", Qmin, "Qmax", Qmax, "Y", Y, "J", J)
+    end
     nothing
 end
 
@@ -106,8 +113,8 @@ IN:
 OUT: modifies input arguments `Pc` and `Qc`.
 """
 function injection!(Pc, Qc, V, T, Y)
-    Pc[:] = 0.
-    Qc[:] = 0.
+    Pc[:] = 0.0
+    Qc[:] = 0.0
     @inbounds for i in 1:length(V)
         for k in find(Y[i,:])
             Tik = T[i] - T[k]
@@ -161,20 +168,20 @@ function jacobian!(J, ty, V, T, Pc, Qc, Y)
         end
 
         if ty[i] != 1 # only PQ buses have reactive mismatch
-            dPdV[:,i] = 0.
-            dQda[i,:] = 0.
+            dPdV[:,i] = 0.0
+            dQda[i,:] = 0.0
 
-            dQdV[i,:] = 0.
-            dQdV[:,i] = 0.
-            dQdV[i,i] = 1.
+            dQdV[i,:] = 0.0
+            dQdV[:,i] = 0.0
+            dQdV[i,i] = 1.0
         end
         if ty[i] == 3 # slack bus has no mismatch eqs
-            dPda[i,:] = 0.
-            dPda[:,i] = 0.
-            dPda[i,i] = 1.
+            dPda[i,:] = 0.0
+            dPda[:,i] = 0.0
+            dPda[i,i] = 1.0
 
-            dPdV[i,:] = 0.
-            dQda[:,i] = 0.
+            dPdV[i,:] = 0.0
+            dQda[:,i] = 0.0
         end
     end
     nothing
@@ -205,7 +212,7 @@ IN:
 OUT: Modifies input arguments `ty` and `V`.
 """
 function pq2pv!(ty, V, Qc, Vmax; silent = false)
-    @inbounds for i in find(ty.==1)
+    @inbounds for i in findin(ty, 1)
         if V[i] > Vmax[i]
             V[i] = Vmax[i]
             ty[i] = 2 # switch from PQ to PV bus
@@ -233,7 +240,7 @@ IN:
 OUT: This function modifies input arguments `ty` and `Qs`.
 """
 function pv2pq!(ty, V, Qs, Qc, Qmin, Qmax; silent = false)
-    @inbounds for i in find(ty.==2)
+    @inbounds for i in findin(ty, 2)
         if Qc[i] > Qmax[i]
             Qs[i] = Qmax[i]
             ty[i] = 1
@@ -277,7 +284,7 @@ function getY(
     x::Vector{Float64},
     b::Vector{Float64},
     tap::Vector{Complex{Float64}} = fill(Complex(1.), length(from)),
-    ysh::Vector{Complex{Float64}} = fill(0.im, length(unique([from;to])));
+    ysh::Vector{Complex{Float64}} = fill(0.0im, length(unique([from;to])));
     lineOut::Vector{Bool} = fill(false, length(from)),
     reindex::Bool = true
     )
@@ -319,7 +326,7 @@ function getY(
 
     # build Ybus
     Y = Cf'*Yf + Ct'*Yt + sparse(1:nbus,1:nbus,ysh,nbus,nbus)
-    return Y #, Yf, Yt
+    return full(Y) #, Yf, Yt
 end
 
 function acpf!(c::MatpowerCases.Case; silent = false)
